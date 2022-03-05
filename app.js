@@ -11,7 +11,7 @@ let app = {
 }
 
 
-let main = async (filename = 'Up Against Down - açucar ácido.mp3') => {
+let main = async (filename = 'RATPAJAMA - Nunca mais.mp3') => {
   try{
     const { changeBitrate, readTags, writeTags } = Audio(app) 
     const { sanitizeFile } = Strings(app) 
@@ -27,10 +27,11 @@ let main = async (filename = 'Up Against Down - açucar ácido.mp3') => {
       output
     })
     
-    let meta = await readTags(output)
-    
+    let meta = await readTags(output) 
+
     if( !_.has(meta.artist) || !_.has(meta.title) ){
       meta.artist = artist
+      meta.performerInfo = artist
       meta.title = title
       meta.bitrate = 96
      
@@ -39,19 +40,19 @@ let main = async (filename = 'Up Against Down - açucar ácido.mp3') => {
       console.log("Write tags", meta)
     }
     
-//     let { filename:newFilename, filePath:newOutput } = await sanitizeFile({ filePath: output })
-//     output = newOutput
-//     filename = newFilename
+    let { filename:newFilename, filePath:newOutput } = await sanitizeFile({ filePath: output })
+    output = newOutput
+    filename = newFilename
     
-//     await connection({ host:process.env.FTP_HOST, user:process.env.FTP_USER, password:process.env.FTP_PASS, })
+    await connection({ host:process.env.FTP_HOST, user:process.env.FTP_USER, password:process.env.FTP_PASS, })
     
-//     await upload(output, `/temp/${filename}`)
+    await upload(output, `/temp/${filename}`)
     
-//     let tempFolder = await list('/temp')
+    let tempFolder = await list('/temp')
     
-//     console.log("File", tempFolder)
+    console.log("File", tempFolder)
     
-//     disconnect()
+    disconnect()
   }catch(e){
     console.error("erro", e)
   }
