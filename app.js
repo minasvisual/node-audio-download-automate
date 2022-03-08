@@ -7,15 +7,18 @@ const Audio = require('./lib/audio')
 const Strings = require('./lib/strings')
 const Ftp = require('./lib/ftp')
 const Explorer = require('./lib/explorer')
+const YoutubeMp3Downloader = require("youtube-mp3-downloader");
 
 let app = { 
   ROOT_PATH: __dirname,
   DEBUG: true,
+  DOWNLOAD_URL: '',
   SOURCE_PATH: path.resolve( __dirname, 'source' ),
   OUTPUT_PATH: path.resolve( __dirname, 'processed' ),
   FTP_SOURCE: path.resolve( __dirname, 'processed' ),
   FTP_FOLDER: '/temp',
-  FTP_FILENAME_CACHE: 'listdb.json' 
+  FTP_FILENAME_CACHE: 'listdb.json',
+  FFMPEG_PATH: 'ffmpeg',
 } 
 
 const updateList = async (dir) => {
@@ -54,6 +57,47 @@ const generateList = async ( ) => {
     if(app.DEBUG) console.log("Generate list END - items ", dir.length)
   }catch(e){
     console.log("Generate list fail", e)
+  }
+}
+
+const YtMp3Process = async ({ videoId, filename=undefined }) => {
+  try{
+    if( !videoId ) return console.log("YtMp3 Process - Video id not exists", videoId)
+    //Configure YoutubeMp3Downloader with your settings
+    var YD = new YoutubeMp3Downloader({
+        "ffmpegPath": app.FFMPEG_PATH,        // FFmpeg binary location
+        "outputPath": app.SOURCE_PATH,    // Output file location (default: the home directory)
+        "youtubeVideoQuality": "highestaudio",  // Desired video quality (default: highestaudio)
+        "queueParallelism": 2,                  // Download parallelism (default: 1)
+        "progressTimeout": 2000,                // Interval in ms for the progress reports (default: 1000)
+        "allowWebm": false                      // Enable download from WebM sources (default: false)
+    });
+
+    //Download video and save as MP3 file
+    YD.download(videoId, filename);
+
+    YD.on("finished", function(err, data) { 
+      if( data.artist == 'Unknown' ){
+        data.videoTitle = data.videoTitle.replace('a-ha', 'a_ha')
+        data.videoTitle = data.videoTitle.replace(/(\s)\1+/g, ' ').replace(/([^0-9a-zA-Z ])\1+/gm, " - ")
+        let titles = /^([^\-|\||'|"]+)\s[\-|\||'|"]\s?([^\-|\||'|"|\(]+)[\-|\||.|:|'|"|\(^]/gi.exec(data.videoTitle.trim())
+        console.log(data.videoTitle, _.get(titles, '[1]','').trim(), _.get(titles, '[2]','').trim())
+        
+        let newFilename =  _.get(titles, '[1]','').trim() +' - '+ _.get(titles, '[2]','').trim()
+        
+        fs.renameSync(data.file, path.resolve( app.SOURCE_PATH,  newFilename+'.mp3' ) )
+      }
+    });
+
+    YD.on("error", function(error) {
+        console.log(error);
+    });
+
+//     YD.on("progress", function(progress) {
+//         console.log(JSON.stringify(progress));
+//     });
+  }catch(e){
+    console.error('YtDownload errror', e)
   }
 }
 
@@ -132,6 +176,10 @@ const UploadProcess = async ({ removeUploaded=true }) => {
 const run = async () => {
   try{
    console.log("Run - Process started")
+  
+    // DOWNLOAD YOUTUBE VIDEOS
+//    YtMp3Process({ videoId: 'PBQB9WPlz6k'})
+    
     //   DECLARATIONS
    let { getFiles } = Explorer(app)
    let newSongs = []  
@@ -171,7 +219,8 @@ const run = async () => {
    // UPDATE FTP_FILENAME_CACHE WITH NEW AUDIO NAMES
    if( newSongs.length > 0 )
      updateList([...dbList, ...newSongs]) 
-   
+    
+    
    console.log("Process finished")
   }catch(e){
     console.error('RUN error', e)
