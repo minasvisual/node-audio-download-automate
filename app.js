@@ -1,13 +1,16 @@
 const path = require('path')
 const fs = require('fs')
 const _ = require('lodash')
+const axios = require('axios')
 require('dotenv').config()
 
 const Audio = require('./lib/audio')
 const Strings = require('./lib/strings')
 const Ftp = require('./lib/ftp')
 const Explorer = require('./lib/explorer')
-const YoutubeMp3Downloader = require("youtube-mp3-downloader");
+const Youtube = require('./lib/youtube')
+const Cache = require('./lib/cache')
+const Args = process.argv.slice(2);
 
 let app = { 
   ROOT_PATH: __dirname,
@@ -19,8 +22,12 @@ let app = {
   FTP_FOLDER: '/temp',
   FTP_FILENAME_CACHE: 'listdb.json',
   FFMPEG_PATH: 'ffmpeg',
+	CACHE_PATH: path.resolve( __dirname, 'cache' ),
+	YOUTUBE_CACHE_FILENAME:  'YoutubeDownloaded.json'
 } 
-
+//
+// INPUT METHODS
+//
 const updateList = async (dir) => {
   let outputPath = path.resolve(__dirname, app.FTP_FILENAME_CACHE)
   try{
@@ -32,7 +39,7 @@ const updateList = async (dir) => {
 
 const generateList = async ( ) => {
   try{
-    if(app.DEBUG) console.log("Generate list Start", output)
+    if(app.DEBUG) console.log("Generate list Start")
     
     let outputPath = path.resolve(__dirname, app.FTP_FILENAME_CACHE)
     const { connection, list, upload, disconnect } = Ftp(app) 
@@ -60,45 +67,80 @@ const generateList = async ( ) => {
   }
 }
 
-const YtMp3Process = async ({ videoId, filename=undefined }) => {
-  try{
-    if( !videoId ) return console.log("YtMp3 Process - Video id not exists", videoId)
-    //Configure YoutubeMp3Downloader with your settings
-    var YD = new YoutubeMp3Downloader({
-        "ffmpegPath": app.FFMPEG_PATH,        // FFmpeg binary location
-        "outputPath": app.SOURCE_PATH,    // Output file location (default: the home directory)
-        "youtubeVideoQuality": "highestaudio",  // Desired video quality (default: highestaudio)
-        "queueParallelism": 2,                  // Download parallelism (default: 1)
-        "progressTimeout": 2000,                // Interval in ms for the progress reports (default: 1000)
-        "allowWebm": false                      // Enable download from WebM sources (default: false)
-    });
+const GetWebYtList = async () => {
+	try{ 
+		const { caching, setFileCache, getFileCache } = Cache(app)
+		
+		let videos = await caching('videos' , async () => { 
+			return await axios.get(process.env.YOUTUBE_LIST_URL).then( ({data}) => data.rows )
+		})
+		
+		return videos
+	}catch(e){
+		console.error("GetWebYtlist error", e)
+		throw e 
+	}
+}
 
-    //Download video and save as MP3 file
-    YD.download(videoId, filename);
+const GetSourceFiles = async () => {
+	try{
+			//   DECLARATIONS
+		 let { getFiles } = Explorer(app) 
+		 let files = getFiles( app.SOURCE_PATH )
+										.map(i => ({ 
+											filename: i.replace( app.SOURCE_PATH+'/', ''),
+											filepath: i,
+										}))
+		 return files
+	 }catch(e){
+		 console.error("GetSourceFiles error")
+		 throw e
+	 }
+}
+//
+// PROCESSES
+//
+const YtMp3Process = async (videos = []) => {
+	try{ 
+		const { Mp3Download, GetVideoId } = Youtube(app)
+		const { caching, setFileCache, getFileCache } = Cache(app)
+		const { parseArtistTitle } = Strings(app)
 
-    YD.on("finished", function(err, data) { 
-      if( data.artist == 'Unknown' ){
-        data.videoTitle = data.videoTitle.replace('a-ha', 'a_ha')
-        data.videoTitle = data.videoTitle.replace(/(\s)\1+/g, ' ').replace(/([^0-9a-zA-Z ])\1+/gm, " - ")
-        let titles = /^([^\-|\||'|"]+)\s[\-|\||'|"]\s?([^\-|\||'|"|\(]+)[\-|\||.|:|'|"|\(^]/gi.exec(data.videoTitle.trim())
-        console.log(data.videoTitle, _.get(titles, '[1]','').trim(), _.get(titles, '[2]','').trim())
-        
-        let newFilename =  _.get(titles, '[1]','').trim() +' - '+ _.get(titles, '[2]','').trim()
-        
-        fs.renameSync(data.file, path.resolve( app.SOURCE_PATH,  newFilename+'.mp3' ) )
-      }
-    });
+		let downloaded = await getFileCache(app.YOUTUBE_CACHE_FILENAME, [])
 
-    YD.on("error", function(error) {
-        console.log(error);
-    });
+		for(let [k, video] of videos.entries() ){
+			console.log("repetido?", video.link, downloaded.includes(video.link))
+			if( downloaded.includes(video.link) ) continue;
 
-//     YD.on("progress", function(progress) {
-//         console.log(JSON.stringify(progress));
-//     });
-  }catch(e){
-    console.error('YtDownload errror', e)
-  }
+			console.log("Video started ", video)
+			let { artist=null, title=null } = await parseArtistTitle(video.title)
+			let filename = artist && title ? `${artist} - ${title}.mp3` : undefined
+			
+			let ended = await Mp3Download({ 
+					videoId: GetVideoId(video.link), 
+					filename
+			})
+			.catch( err => console.error("YtMp3Process video error", video, err))
+			
+			if( ended )
+				downloaded.push( _.get(ended, 'youtubeUrl') )
+			
+			videos[k] = {
+				...video,
+				...ended,
+				filename: ended.file.replace(app.SOURCE_PATH+'/', '')
+			}
+			
+			console.log("Video ended", _.get(ended, 'videoTitle','FAILED') )
+		}
+
+		setFileCache('YoutubeDownloaded.json', downloaded)
+		
+		return videos
+	} catch(e) {
+		console.error("YtMp3Process error", e)
+		throw e
+	}
 }
 
 const AudioProcess = async ({ filename, bitrate=96, removeConverted=true }) => {
@@ -107,12 +149,13 @@ const AudioProcess = async ({ filename, bitrate=96, removeConverted=true }) => {
     if( !filename ) throw { message: 'Filename not exists' }
        
     const { changeBitrate, readTags, writeTags } = Audio(app) 
-    const { sanitizeFile } = Strings(app)  
+    const { sanitizeFile, parseArtistTitle } = Strings(app)  
     
     let source = path.resolve( app.SOURCE_PATH, filename)
     let output = path.resolve( app.OUTPUT_PATH, filename)
     
-    let [, artist, title, ext] = /^(.*[^\s])\s?-\s?([^\s].*)\.(.*)/gm.exec(filename)
+//     let [, artist, title, ext] = /^(.*[^\s])\s?-\s?([^\s].*)\.(.*)/gm.exec(filename)
+    let [, artist, title, ext] = /^([^\-|\||"|:]+)\s[\-|\||"]\s?([^\-|\||'|"|\(]+)[\-|\||.|:|'|"|\(^]/gi.exec(filename.trim())
 
     let audioFile = await changeBitrate({
       source,
@@ -131,8 +174,9 @@ const AudioProcess = async ({ filename, bitrate=96, removeConverted=true }) => {
       meta.title = title
       meta.bitrate = bitrate
      
-      await writeTags(output, meta) 
     }
+      
+		await writeTags(output, meta) 
     
     let { filename:newFilename, filePath:newOutput } = await sanitizeFile({ filePath: output })
     output = newOutput
@@ -173,21 +217,22 @@ const UploadProcess = async ({ removeUploaded=true }) => {
   }
 }
 
-const run = async () => {
+
+//
+// OPTIONS
+// 
+const ApiSchedule = async () => {
   try{
-   console.log("Run - Process started")
+   console.log("Run - Process started") 
   
-    // DOWNLOAD YOUTUBE VIDEOS
-//    YtMp3Process({ videoId: 'PBQB9WPlz6k'})
+  // get list of links and title
+  let videos = await GetWebYtList()
+  // DOWNLOAD YOUTUBE VIDEOS
+  await YtMp3Process(videos)
     
-    //   DECLARATIONS
-   let { getFiles } = Explorer(app)
+    //   DECLARATIONS 
    let newSongs = []  
-   let files = getFiles( app.SOURCE_PATH )
-                  .map(i => ({ 
-                    filename: i.replace( app.SOURCE_PATH+'/', ''),
-                    filepath: i,
-                  }))
+   let files = await GetSourceFiles()
    
    console.log("Run - Found files: ", files.length)
    
@@ -220,12 +265,52 @@ const run = async () => {
    if( newSongs.length > 0 )
      updateList([...dbList, ...newSongs]) 
     
-    
    console.log("Process finished")
   }catch(e){
     console.error('RUN error', e)
   }
 }
 
-run()
+const YtUniqueVideoProcess = async (url) => {
+	try{   
+   let newSongs = []  
+	 let [ended] = await YtMp3Process([{ link: url }]) 
+		
+    // GENERATE FTP CACHE AUDIO LIST IF NOT EXISTS
+	 if( !fs.existsSync( path.resolve(__dirname, app.FTP_FILENAME_CACHE) ) ){
+			await generateList()
+	 }
+   let dbList = require(`./${app.FTP_FILENAME_CACHE}`)
+	 
+	 if( dbList.includes( ended.filename.toLowerCase() ) )
+        throw "YtUniqueVideoProcess - Filename already exists on cached list" 
+		// COPY TO SOURCE_FOLDER TO OUTPUT_FOLDER WITH NEW AUDIO BITRATE 
+		// CHANGE FILL METATAGS 
+		// CHANGE SANITIZE FILE AND RENAME
+		await AudioProcess({ filename: ended.filename })
+      
+      // UPDATE NEW AUDIO FILES VAR
+		
+		await UploadProcess({})
+    
+   // UPDATE FTP_FILENAME_CACHE WITH NEW AUDIO NAMES
+   newSongs.push( ended.filename.toLowerCase() ) 
+   if( newSongs.length > 0 )
+     updateList([...dbList, ...newSongs]) 
+		
+		console.log("YtUniqueVideoProcess end", ended)
+	}catch(e){
+    console.error('YtUniqueVideoProcess error', e) 
+		return 0
+	}
+} 
+
+console.log("Options", Args)
+
+let [task, param1] = Args 
+if( task == "getOneByYoutube" && param1 )
+	YtUniqueVideoProcess(param1)
+else 
+	return console.log("Nenhuma opcao escolhida")
+
 //Up Against Down - Harmony Pulse.mp3
