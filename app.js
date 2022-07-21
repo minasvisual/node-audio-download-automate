@@ -2,7 +2,9 @@ const path = require('path')
 const fs = require('fs')
 const _ = require('lodash')
 const axios = require('axios')
+const Database = require("easy-json-database");
 require('dotenv').config()
+
 
 const Audio = require('./lib/audio')
 const Strings = require('./lib/strings')
@@ -25,9 +27,15 @@ let app = {
 	CACHE_PATH: path.resolve( __dirname, 'cache' ),
 	YOUTUBE_CACHE_FILENAME:  'YoutubeDownloaded.json'
 } 
+
+const { connection, list, upload, download, deleteFile, disconnect, reconnect } = Ftp(app) 
 //
 // INPUT METHODS
 //
+const waiting = (timeout = 1000 * 1) => new Promise( (res, rej) => {
+	setTimeout(res, timeout)
+})
+			
 const updateList = async (dir) => {
   let outputPath = path.resolve(__dirname, app.FTP_FILENAME_CACHE)
   try{
@@ -41,8 +49,7 @@ const generateList = async ( ) => {
   try{
     if(app.DEBUG) console.log("Generate list Start")
     
-    let outputPath = path.resolve(__dirname, app.FTP_FILENAME_CACHE)
-    const { connection, list, upload, disconnect } = Ftp(app) 
+    let outputPath = path.resolve(__dirname, app.FTP_FILENAME_CACHE) 
   
     if( fs.existsSync(outputPath) ){
       fs.unlinkSync(outputPath)
@@ -54,7 +61,7 @@ const generateList = async ( ) => {
     let folders = await list('/').filter(i => i.type == 'd').map(i => i.name)
     let dir = []
     for(let folder of folders){
-      dir = [ ...dir, ...await list(`/${folder}`).filter(i => i.type == '-').map(i => i.name.toLowerCase()) ]
+      dir = [ ...dir, ...await list(`/${folder}`).filter(i => i.type == '-').map(i => `${folder}/${i.name}`) ]
     }
       
     updateList(dir)
@@ -72,13 +79,29 @@ const GetWebYtList = async () => {
 		const { caching, setFileCache, getFileCache } = Cache(app)
 		
 		let videos = await caching('videos' , async () => { 
-			return await axios.get(process.env.YOUTUBE_LIST_URL).then( ({data}) => data.rows )
+			return await axios.get(process.env.YOUTUBE_LIST_URL + '?limit=100&sort=-id&filter=type,eq,link&filter=download,eq,0').then( ({data}) => data.rows.map(
+					row => {
+							return {
+								...row,
+								link: row.path,
+								title: _.has(row, 'meta.artist') && _.has(row, 'meta.title') ? `${row.meta.artist} - ${row.meta.title}` : null
+							}
+					}) 
+			)
 		})
 		
 		return videos
 	}catch(e){
 		console.error("GetWebYtlist error", e)
 		throw e 
+	}
+}
+
+const UpdateWebYtList = async (id, payload) => {
+	try{
+		axios.put(process.env.YOUTUBE_LIST_URL + '/' + id, payload).then( ({data}) => console.log('UpdateWebYtList', data) )
+	}catch(e){
+		console.error('UpdateWebYtList error ', e)
 	}
 }
 
@@ -196,7 +219,6 @@ const UploadProcess = async ({ removeUploaded=true }) => {
     if( !app.FTP_SOURCE ) throw { message: 'sourceDir not exists' } 
      
     const { getFiles } = Explorer(app)
-    const { connection, list, upload, disconnect } = Ftp(app) 
      
     let files = getFiles( app.FTP_SOURCE ).map(i => ({ filename: i.replace( app.FTP_SOURCE+'/', ''), filepath: i }))
     if( !files.length ) return console.log("UploadProcess stoped - source empty", app.FTP_SOURCE)  
@@ -217,100 +239,244 @@ const UploadProcess = async ({ removeUploaded=true }) => {
   }
 }
 
-
 //
 // OPTIONS
-// 
-const ApiSchedule = async () => {
-  try{
-   console.log("Run - Process started") 
-  
-  // get list of links and title
-  let videos = await GetWebYtList()
-  // DOWNLOAD YOUTUBE VIDEOS
-  await YtMp3Process(videos)
-    
-    //   DECLARATIONS 
-   let newSongs = []  
-   let files = await GetSourceFiles()
-   
-   console.log("Run - Found files: ", files.length)
-   
-   // GENERATE FTP CACHE AUDIO LIST IF NOT EXISTS
-   if( !fs.existsSync( path.resolve(__dirname, app.FTP_FILENAME_CACHE) ) ){
-      generateList()
-   }
-   let dbList = require(`./${app.FTP_FILENAME_CACHE}`)
-   
-   // PROCESS FILES OF SOURCE FOLDER
-   for( let file of files ){
-      if( dbList.includes( file.filename.toLowerCase() ) ){
-        console.log("Run - Filename already exists on cached list", file)
-        continue;
-      } 
+//   
+const mapId3Ftp = async () => {
+	try{
+    if(app.DEBUG) console.log("map Id3 Ftp list Start")
+		
+    const { readTags, writeTags } = Audio(app) 
+		const connParams = { host:process.env.FTP_HOST, user:process.env.FTP_USER, password:process.env.FTP_PASS, keepalive: 1000 * 60 }
      
-      // COPY TO SOURCE_FOLDER TO OUTPUT_FOLDER WITH NEW AUDIO BITRATE 
-      // CHANGE FILL METATAGS 
-      // CHANGE SANITIZE FILE AND RENAME
-      await AudioProcess({ ...file })
-      
-      // UPDATE NEW AUDIO FILES VAR
-      newSongs.push(file.filename.toLowerCase())
-   }
+    await connection(connParams)
     
-   // UPLOAD FILES FROM FTP_SOURCE FOLDER TO FTP_FOLDER
-   await UploadProcess({})
+		let status = true
+		let dir = {}
+    let folder = 'geral3'//await list('/').filter(i => i.type == 'd').map(i => i.name) 
+		const db = new Database(`./cache/${folder}.json`);
+		let outputPath = path.resolve( app.CACHE_PATH, `${folder}.json`)  
+
+		let files = await list(`/${folder}`).filter(i => i.type == '-')
+
+		let queue = _.chunk(files, 25)
+		
+		queue = queue.slice(0, 8)
+		
+    for(let [k, rows] of queue.entries()){ 
+			 
+			for(let file of rows ){
+				//console.log('Started file '+ file.name )
+				let filePath = path.resolve( app.OUTPUT_PATH, file.name)  
+				try{ 
+					let downloaded = await download(`/${folder}/${file.name}`, filePath) 
+
+					let meta = await readTags(filePath) 
+					let key = file.name.replace(/\s/g,'_').replace(/\.mp3/g,'') 
+
+					db.set( `/${folder}/${key}`, _.pick(meta, ['artist','performerInfo',`title`,'bitrate']) )
+
+					fs.unlinkSync(filePath)
+
+					console.log('Ended file '+ file.name, `/${folder}/${key}`)
+				}catch(e){
+					console.log('Ended error file '+ `/${folder}/${file.name.replace(/\s/g,'_').replace(/\.mp3/g,'') }`, e)
+					if( fs.existsSync(filePath) )
+						fs.unlinkSync(filePath) 
+				}
+				
+				await waiting(500)
+			}
+			
+			console.log(`Ended row ${k} of ${queue.length}`)
+    } 
     
-   // UPDATE FTP_FILENAME_CACHE WITH NEW AUDIO NAMES
-   if( newSongs.length > 0 )
-     updateList([...dbList, ...newSongs]) 
-    
-   console.log("Process finished")
-  }catch(e){
-    console.error('RUN error', e)
-  }
+		disconnect()
+		
+    if(app.DEBUG) console.log("map Id3 Ftp list END - items ", dir.length)
+		
+	}catch(e){
+    console.error('map Id3 Ftp error', e) 
+		return 0 
+	}
+
+	process.on('SIGTERM', () => {
+		console.info('SIGTERM signal received.');
+	});
 }
 
-const YtUniqueVideoProcess = async (url) => {
-	try{   
-   let newSongs = []  
-	 let [ended] = await YtMp3Process([{ link: url }]) 
+const changeFileId3Ftp = async (ftpPath, name) => {
+	try{
+    if(app.DEBUG) console.log("changeFileId3Ftp Start")
 		
-    // GENERATE FTP CACHE AUDIO LIST IF NOT EXISTS
-	 if( !fs.existsSync( path.resolve(__dirname, app.FTP_FILENAME_CACHE) ) ){
-			await generateList()
-	 }
-   let dbList = require(`./${app.FTP_FILENAME_CACHE}`)
-	 
-	 if( dbList.includes( ended.filename.toLowerCase() ) )
-        throw "YtUniqueVideoProcess - Filename already exists on cached list" 
-		// COPY TO SOURCE_FOLDER TO OUTPUT_FOLDER WITH NEW AUDIO BITRATE 
-		// CHANGE FILL METATAGS 
-		// CHANGE SANITIZE FILE AND RENAME
-		await AudioProcess({ filename: ended.filename })
+		
+    const { readTags, writeTags } = Audio(app) 
+		const connParams = { host:process.env.FTP_HOST, user:process.env.FTP_USER, password:process.env.FTP_PASS, keepalive: 1000 * 60 }
+     
+    await connection(connParams) 
+
+		//console.log('Started file '+ file.name )
+		let filePath = path.resolve( app.OUTPUT_PATH, path.basename(ftpPath))  
+		try{ 
+			let downloaded = await download(ftpPath, filePath) 
+
+			name = name.split(' - ')
+ 			let meta = await readTags(filePath) 
+ 
+      meta.artist = name[0]
+      meta.performerInfo = name[0]
+      meta.title = name[1]
+      meta.bitrate = 96 
       
-      // UPDATE NEW AUDIO FILES VAR
+		  await writeTags(filePath, meta) 
+			
+  		await upload(filePath, ftpPath) 
+       
+      fs.unlinkSync(filePath)
+
+			console.log('Ended file '+ ftpPath, _.pick(meta, ['artist','performerInfo',`title`,'bitrate']))
+		}catch(e){
+			console.log('Ended error file '+ ftpPath, e)
+			if( fs.existsSync(filePath) )
+				fs.unlinkSync(filePath) 
+		} 
+
+		disconnect()
 		
-		await UploadProcess({})
-    
-   // UPDATE FTP_FILENAME_CACHE WITH NEW AUDIO NAMES
-   newSongs.push( ended.filename.toLowerCase() ) 
-   if( newSongs.length > 0 )
-     updateList([...dbList, ...newSongs]) 
-		
-		console.log("YtUniqueVideoProcess end", ended)
+    if(app.DEBUG) console.log("changeFileId3Ftp END")
 	}catch(e){
-    console.error('YtUniqueVideoProcess error', e) 
-		return 0
+		disconnect()
+    console.error('map Id3 Ftp error', e) 
+		return 0 
 	}
-} 
+}
+
+const getMetaFtp = async (ftpPaths, params = {}) => {
+	try{
+    if(app.DEBUG) console.log("getMetaFtp Start")
+		
+		let metas = []
+    const { readTags, writeTags } = Audio(app) 
+		const connParams = { host:process.env.FTP_HOST, user:process.env.FTP_USER, password:process.env.FTP_PASS, }
+     
+    await connection(connParams) 
+
+		//console.log('Started file '+ file.name )
+		if( !Array.isArray(ftpPaths) ) ftpPaths = [ftpPaths]
+		for(let ftpPath of ftpPaths){
+			let filePath = path.resolve( app.OUTPUT_PATH, path.basename(ftpPath))  
+			try{ 
+				let downloaded = await download(ftpPath, filePath) 
+
+				let meta = await readTags(filePath) 
+
+				fs.unlinkSync(filePath)
+
+				console.log('Ended file '+ ftpPath )
+
+				metas.push(meta)
+				
+				if( params.log !== false )
+					console.log(meta)
+			}catch(e){
+				console.log('Ended error file '+ ftpPath, e)
+				if( fs.existsSync(filePath) )
+					fs.unlinkSync(filePath) 
+			} 
+		}
+
+		disconnect()
+		
+		return metas
+		
+    if(app.DEBUG) console.log("getMetaFtp END")
+	}catch(e){
+		disconnect()
+    console.error('getMetaFtp error', e) 
+		return 0 
+	}
+}
+
+const deleteFileFtp = async (ftpPath) => {
+	try{
+    if(app.DEBUG) console.log("deleteFileFtp Start")
+		 
+		const connParams = { host:process.env.FTP_HOST, user:process.env.FTP_USER, password:process.env.FTP_PASS, }
+     
+    await connection(connParams) 
+ 
+		await deleteFile(ftpPath)
+
+		disconnect()
+		
+    if(app.DEBUG) console.log("deleteFileFtp END")
+	}catch(e){
+		disconnect()
+    console.error('deleteFileFtp error', e) 
+		return 0 
+	}
+}
+
+const open = async (list) => {
+	try{ 
+	 console.log("Open - registe mp3 start") 
+   let dbList = require(`./${app.FTP_FILENAME_CACHE}`)
+	 let queue = _.chunk(dbList, 20) 
+	  
+	 let { data:{ token } } = await axios.post(`${process.env.API_URL}/auth/login`, {
+	 		email: process.env.API_USER,
+	 		password: process.env.API_PASS,
+	 })
+	 
+	 let metas = await getMetaFtp(queue[list], { log: false })
+		 
+	 for(let [k, item] of queue[list].entries() ){
+		 await axios.post(`${process.env.API_URL}/ets/streaming`, {
+			 path: item,
+			 type: 'mp3',
+			 sync: false,
+			 download: true,
+			 meta: _.pick(metas[k], ['artist','performerInfo',`title`,'bitrate']),
+		 }, { headers: { 'access-token': token } }).catch(e => console.log(item, e.response.data) )
+	 }
+		 
+	 console.log("Open - registe mp3 done", list, ' of ', queue.length)
+			 
+	}catch(e){
+		console.error("open error", e)
+	}
+}
 
 console.log("Options", Args)
 
-let [task, param1] = Args 
-if( task == "getOneByYoutube" && param1 )
-	YtUniqueVideoProcess(param1)
-else 
-	return console.log("Nenhuma opcao escolhida")
+let [task, param1, param2] = Args  
+if( task == "mapId3Ftp"  )
+	mapId3Ftp()
+if( task == "getMetaFtp" && param1 )
+	getMetaFtp(param1)
+if( task == "deleteFileFtp" && param1 )
+	deleteFileFtp(param1)
+if( task == "changeMetaFtp"  )
+	changeFileId3Ftp(param1, param2)
+if( task == "generateList"  )
+	generateList()
+if( task == 'open' )
+	open(param1, param2)
+else {
+	console.log("Nenhuma opcao escolhida") 
+	console.log("mapId3Ftp")
+	console.log("deleteFileFtp - FTP_PATH")
+	console.log("changeMetaFtp - FTP_Path - New_Name_-_New_Title")
+	console.log("generateList")
+	console.log("open - FTP_Path - New_Name_-_New_Title")
+}
+
+console.log('Open Parou no 115')
+
+process.on('SIGTERM', () => {
+  console.info('SIGTERM signal received.');
+	
+	disconnect()
+});
 
 //Up Against Down - Harmony Pulse.mp3
