@@ -28,7 +28,7 @@ let app = {
 	YOUTUBE_CACHE_FILENAME:  'YoutubeDownloaded.json'
 } 
 
-const { connection, list, upload, download, deleteFile, disconnect, reconnect } = Ftp(app) 
+const { connection, list, upload, download, deleteFile, disconnect, reconnect, rename } = Ftp(app) 
 //
 // INPUT METHODS
 //
@@ -241,7 +241,46 @@ const UploadProcess = async ({ removeUploaded=true }) => {
 
 //
 // OPTIONS
-//   
+//    
+
+const BitrateProcess = async ({ bitrate=96, removeConverted=true }) => {
+  try{
+    if(app.DEBUG) console.log("BitrateProcess Start") 
+       
+    const { getFiles } = Explorer(app)
+    const { changeBitrate, readTags, writeTags } = Audio(app)  
+		
+		
+    let files = getFiles( app.SOURCE_PATH ).map(i => ({ filename: i.replace( app.SOURCE_PATH+'/', ''), filepath: i }))
+    if( !files.length ) return console.log("UploadProcess stoped - source empty", app.FTP_SOURCE)  
+		
+		for(let file of files ) { 
+			let source = path.resolve( app.SOURCE_PATH, file.filename)
+			let output = path.resolve( app.OUTPUT_PATH, file.filename)	
+			console.log('converting', file.filename	)
+
+			let audioFile = await changeBitrate({
+				source,
+				output,
+				bitrate
+			})
+
+			if( removeConverted && fs.existsSync(output) )
+					fs.unlinkSync(source)
+			
+			console.log('done converting', file.filename	)
+		}
+     
+		await UploadProcess({})
+      
+    if(app.DEBUG) console.log("BitrateProcess END")
+    
+    return true
+  }catch(e){
+    console.error("erro", e)
+  }
+}
+
 const mapId3Ftp = async () => {
 	try{
     if(app.DEBUG) console.log("map Id3 Ftp list Start")
@@ -417,6 +456,48 @@ const deleteFileFtp = async (ftpPath) => {
 	}
 }
 
+const listFiles = async (ftpPath) => {
+	try{
+    if(app.DEBUG) console.log("listFiles Start")
+		 
+		const connParams = { host:process.env.FTP_HOST, user:process.env.FTP_USER, password:process.env.FTP_PASS, }
+     
+    await connection(connParams) 
+ 
+		let listed = await list(ftpPath)
+
+		console.log(listed.map(i => i.name))
+		
+		disconnect()
+		
+    if(app.DEBUG) console.log("listFiles END")
+	}catch(e){
+		disconnect()
+    console.error('listFiles error', e) 
+		return 0 
+	}
+}
+
+const renameFiles = async (oldPath, newPath) => {
+	try{
+    if(app.DEBUG) console.log("renameFiles Start")
+		 
+		const connParams = { host:process.env.FTP_HOST, user:process.env.FTP_USER, password:process.env.FTP_PASS, }
+     
+    await connection(connParams) 
+ 
+		await rename(oldPath, newPath)
+
+		disconnect()
+		
+    if(app.DEBUG) console.log("renameFiles END")
+	}catch(e){
+		disconnect()
+    console.error('renameFiles error', e) 
+		return 0 
+	}
+}
+
 const open = async (list) => {
 	try{ 
 	 console.log("Open - registe mp3 start") 
@@ -452,26 +533,36 @@ console.log("Options", Args)
 let [task, param1, param2] = Args  
 if( task == "mapId3Ftp"  )
 	mapId3Ftp()
-if( task == "getMetaFtp" && param1 )
+else if( task == "getMetaFtp" && param1 )
 	getMetaFtp(param1)
-if( task == "deleteFileFtp" && param1 )
+else if( task == "deleteFileFtp" && param1 )
 	deleteFileFtp(param1)
-if( task == "changeMetaFtp"  )
+else if( task == "listFtp" && param1 )
+	listFiles(param1)
+else if( task == "renameFileFtp" && param1 && param2 )
+	renameFiles(param1, param2)
+else if( task == "changeMetaFtp"  )
 	changeFileId3Ftp(param1, param2)
-if( task == "generateList"  )
+else if( task == "generateList"  )
 	generateList()
-if( task == 'open' )
+else if( task == 'bitrateProcess' )
+	BitrateProcess({})
+else if( task == 'open' )
 	open(param1, param2)
 else {
 	console.log("Nenhuma opcao escolhida") 
 	console.log("mapId3Ftp")
 	console.log("deleteFileFtp - FTP_PATH")
+	console.log("listFtp - FTP_PATH")
+	console.log("renameFileFtp - OLD_FTP_PATH - NEW_FTP_PATH")
 	console.log("changeMetaFtp - FTP_Path - New_Name_-_New_Title")
 	console.log("generateList")
+	console.log("bitrateProcess")
 	console.log("open - FTP_Path - New_Name_-_New_Title")
+	
+	console.log('Open Parou no 115')
 }
 
-console.log('Open Parou no 115')
 
 process.on('SIGTERM', () => {
   console.info('SIGTERM signal received.');

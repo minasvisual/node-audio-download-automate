@@ -166,7 +166,10 @@ const DownloadYtMp3 = async (video) => {
         videoId: GetVideoId(video.link), 
         filename
     })
-    .catch( err => console.error("YtMp3Process video error", video, err))
+    .catch( err => {
+			console.error("YtMp3Process video error", video, err)
+			throw err
+		})
 			
     if( !ended ) throw video
     
@@ -361,12 +364,37 @@ const ApiSchedule = async () => {
 
          video.title = `${video.meta.artist} - ${video.meta.title}`
 
-         video = await DownloadYtMp3(video)
+         video = await DownloadYtMp3(video).catch( e => {	
+					 console.log('test errr', e.message)
+					 if( e.message && e.message.includes('Video unavailable') ){
+							UpdateWebYtList(video.id, {
+// 							console.log({
+									"type": "error",  
+									"path": `${ app.FTP_FOLDER.replace('/','') }/${video.path}`,
+									"sync": true,
+									..._.pick(video, ['link', 'meta', 'download'])
+							 }) 
+						 video.error = true
+					 }else{
+						 throw e
+					 }
+				 })
+			
+				 if( video.error )
+					 continue;
 
 				 if( video.repeated !== true ){
-	         video.path = await ChangeMeta({ filename: video.path, metaname: (video.title || video.videoTitle) + '.mp3' ,sourceFolder: app.SOURCE_PATH })
+	         video.path = await ChangeMeta({ 
+						 filename: video.path, 
+						 metaname: (video.title || video.videoTitle) + '.mp3' ,
+						 sourceFolder: app.SOURCE_PATH 
+					 })
 
-         	 fse.moveSync( `${app.SOURCE_PATH}/${video.path}`, `${app.OUTPUT_PATH}/${video.path}`, { overwrite: true })
+         	 fse.moveSync( 
+						 `${app.SOURCE_PATH}/${video.path}`,
+						 `${app.OUTPUT_PATH}/${video.path}`, 
+						 { overwrite: true }
+					 )
 				 }
 		
          await UpdateWebYtList(video.id, {
