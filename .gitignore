@@ -2,3 +2,5 @@
 node_modules
 source/*
 processed/*
+cache/*
+listdb.json
