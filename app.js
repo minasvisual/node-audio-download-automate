@@ -528,11 +528,29 @@ const open = async (list) => {
 	}
 }
 
+const installation = async () => {
+  try{
+    if (!fs.existsSync( path.resolve(__dirname, 'source') )){
+      fs.mkdirSync(path.resolve(__dirname, 'source'));
+    }
+    if (!fs.existsSync( path.resolve(__dirname, 'processed') )){
+      fs.mkdirSync(path.resolve(__dirname, 'processed'));
+    }
+    if (!fs.existsSync( path.resolve(__dirname, 'cache') )){
+      fs.mkdirSync(path.resolve(__dirname, 'cache'));
+    }
+    await generateList()
+  }catch(e){
+    console.log("error instalation", e)
+  }
+}
 console.log("Options", Args)
 
 let [task, param1, param2] = Args  
 if( task == "mapId3Ftp"  )
 	mapId3Ftp()
+else if( task == "installation"  )
+  installation()
 else if( task == "getMetaFtp" && param1 )
 	getMetaFtp(param1)
 else if( task == "deleteFileFtp" && param1 )
@@ -569,5 +587,3 @@ process.on('SIGTERM', () => {
 	
 	disconnect()
 });
-
-//Up Against Down - Harmony Pulse.mp3
