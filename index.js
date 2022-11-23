@@ -4,7 +4,7 @@ const router = express.Router();
 
 const port = 8080;
 
-express.get('/', function(req,res){
+app.get('/', function(req,res){
   res.send('Tudo ok')
 });
 
