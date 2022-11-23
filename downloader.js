@@ -304,7 +304,65 @@ const UploadProcess = async ({ removeUploaded=true }) => {
   }
 }
  
+const GenerateYtCache = async ({}) => {
+	try{
+		 const { caching, setFileCache, getFileCache } = Cache(app)
+     let token = null
+        
+	   let { data } = await axios.get(process.env.YOUTUBE_LIST_URL + '?filter=type,eq,mp3&filter=link,like,https%&fields=link')
+		 
+		 let links = _.map(data, 'link')
+		 
+		 console.log('Count links', links.length)
+		
+		 setFileCache(app.YOUTUBE_CACHE_FILENAME, links)
+	}catch(e){
+		console.error('UpdateWebYtList error ', e)
+	}
+}
 
+const YtMp3Process = async (videos = []) => {
+	try{ 
+		const { Mp3Download, GetVideoId } = Youtube(app)
+		const { caching, setFileCache, getFileCache } = Cache(app)
+		const { parseArtistTitle } = Strings(app)
+
+		let downloaded = await getFileCache(app.YOUTUBE_CACHE_FILENAME, [])
+
+		for(let [k, video] of videos.entries() ){
+			console.log("repetido?", video.link, downloaded.includes(video.link))
+			if( downloaded.includes(video.link) ) continue;
+
+			console.log("Video started ", video)
+			let { artist=null, title=null } = await parseArtistTitle(video.title)
+			let filename = artist && title ? `${artist} - ${title}.mp3` : undefined
+			
+			let ended = await Mp3Download({ 
+					videoId: GetVideoId(video.link), 
+					filename
+			})
+			.catch( err => console.error("YtMp3Process video error", video, err))
+			
+			if( ended )
+				downloaded.push( _.get(ended, 'youtubeUrl') )
+			
+			videos[k] = {
+				...video,
+				...ended,
+				filename: ended.file.replace(app.SOURCE_PATH+'/', '')
+			}
+			
+			console.log("Video ended", _.get(ended, 'videoTitle','FAILED') )
+		}
+
+		setFileCache('YoutubeDownloaded.json', downloaded)
+		
+		return videos
+	} catch(e) {
+		console.error("YtMp3Process error", e)
+		throw e
+	}
+}
 //
 // OPTIONS
 //  
@@ -418,11 +476,14 @@ console.log("Options", Args)
 let [task, param1, param2] = Args 
 if( task == "getYoutubeByApi" )
 	ApiSchedule()
+if( task == "generateYtCache" )
+	GenerateYtCache({})
 if( task == "getOneByYoutube" && param1 )
 	YtUniqueVideoProcess(param1)   
 else {
 	console.log("Nenhuma opcao escolhida")
-	console.log("getYoutubeByApi - URL") 
+	console.log("generateYtCache") 
+	console.log("getYoutubeByApi") 
 	console.log("getOneByYoutube - URL") 
 }
 

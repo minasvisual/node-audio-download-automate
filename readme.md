@@ -17,5 +17,5 @@
 
 ## EXTERNAL DEPENDENCIES
 
-- LAME
-- FFMPEG
+- LAME (sudo apt install lame)
+- FFMPEG (sudo apt install ffmpeg)
