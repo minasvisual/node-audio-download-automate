@@ -4,3 +4,4 @@ source/*
 processed/*
 cache/*
 listdb.json
+.vscode

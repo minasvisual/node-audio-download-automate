@@ -168,7 +168,7 @@ const DownloadYtMp3 = async (video) => {
     })
     .catch( err => {
 			console.error("YtMp3Process video error", video, err)
-			throw err
+			throw err 
 		})
 			
     if( !ended ) throw video
@@ -424,7 +424,7 @@ const ApiSchedule = async () => {
 
          video = await DownloadYtMp3(video).catch( e => {	
 					 console.log('test errr', e.message)
-					 if( e.message && e.message.includes('Video unavailable') ){
+					//  if( e.message && e.message.includes('Video unavailable') ){
 							UpdateWebYtList(video.id, {
 // 							console.log({
 									"type": "error",  
@@ -433,9 +433,9 @@ const ApiSchedule = async () => {
 									..._.pick(video, ['link', 'meta', 'download'])
 							 }) 
 						 video.error = true
-					 }else{
-						 throw e
-					 }
+					//  }else{
+					// 	 throw e
+					//  }
 				 })
 			
 				 if( video.error )
