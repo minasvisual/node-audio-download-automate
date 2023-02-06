@@ -438,7 +438,7 @@ const ApiSchedule = async () => {
 					//  }
 				 })
 			
-				 if( video.error )
+				 if( !video || video.error )
 					 continue;
 
 				 if( video.repeated !== true ){
