@@ -22,7 +22,7 @@ let app = {
   SOURCE_PATH: path.resolve( __dirname, 'source' ),
   OUTPUT_PATH: path.resolve( __dirname, 'processed' ),
   FTP_SOURCE: path.resolve( __dirname, 'processed' ),
-  FTP_FOLDER: '/geral4',
+  FTP_FOLDER: process.env.FTP_FOLDER,//'/geral4',
   FTP_FILENAME_CACHE: 'listdb.json',
   FFMPEG_PATH: 'ffmpeg',
 	CACHE_PATH: path.resolve( __dirname, 'cache' ),
@@ -79,18 +79,30 @@ const generateList = async ( ) => {
 const GetWebYtList = async () => {
 	try{ 
 		const { caching, setFileCache, getFileCache } = Cache(app)
+    let token = null
+     
+    if( !app.temp || !app.temp.apiToken )
+      await axios.post(`${process.env.API_URL}/auth/login`, {
+         email: process.env.API_USER,
+         password: process.env.API_PASS,
+      }).then( ({data}) => { 
+        app.temp.apiToken = data.token;  
+      })
+    
+    let opts =  { headers: { 'access-token': app.temp.apiToken } }
+    console.log(opts)
 		
-		let videos = await caching('videos' , async () => { 
-			return await axios.get(process.env.YOUTUBE_LIST_URL + '?limit=100&sort=-id&filter=type,eq,link&filter=download,eq,0').then( ({data}) => data.rows.map(
-					row => {
-							return {
-								...row,
-								title: _.has(row, 'meta.artist') && _.has(row, 'meta.title') ? `${row.meta.artist} - ${row.meta.title}` : null
-							}
-					}) 
+		let videos = await caching('videos' , async () => {  
+			return await axios.get(process.env.YOUTUBE_LIST_URL + '?limit=100&sort=-id&filter=type,eq,link&filter=download,eq,0', opts).then( 
+        ({data}) => data.rows.map( row => {
+            return {
+              ...row,
+              title: _.has(row, 'meta.artist') && _.has(row, 'meta.title') ? `${row.meta.artist} - ${row.meta.title}` : null
+            }
+        }) 
 			)
 		})
-		
+    console.log('videos', videos)
 		return videos
 	}catch(e){
 		console.error("GetWebYtlist error", e)
@@ -404,6 +416,7 @@ const ApiSchedule = async () => {
 	try{ 
     let videos  =  await GetWebYtList()
 
+
     for( let video of videos ){
       // 	 let video = {
       //     "id": 2770,
@@ -466,9 +479,9 @@ const ApiSchedule = async () => {
 
      await UploadProcess({})
 
-     console.log("Finalizado")
+     console.log("Finalizado: videos", videos.length)
 	}catch(e){
-		console.error("open error", e)
+		console.error("open error", _.get(e, 'response.data', e))
 	}
 }
 
@@ -480,6 +493,8 @@ if( task == "generateYtCache" )
 	GenerateYtCache({})
 if( task == "getOneByYoutube" && param1 )
 	YtUniqueVideoProcess(param1)   
+if( task == "testing" )
+  GetWebYtList()
 else {
 	console.log("Nenhuma opcao escolhida")
 	console.log("generateYtCache") 
