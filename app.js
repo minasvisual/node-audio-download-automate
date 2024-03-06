@@ -577,8 +577,7 @@ else {
 	console.log("generateList")
 	console.log("bitrateProcess")
 	console.log("open - FTP_Path - New_Name_-_New_Title")
-	
-	console.log('Open Parou no 115')
+	 
 }
 
 

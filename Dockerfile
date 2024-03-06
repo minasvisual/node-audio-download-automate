@@ -13,6 +13,6 @@ COPY . .
 
 RUN npm install
 RUN node app.js installation
-RUN node downloader getYoutubeByApi
+# RUN node downloader getYoutubeByApi
 
 CMD node index.js
